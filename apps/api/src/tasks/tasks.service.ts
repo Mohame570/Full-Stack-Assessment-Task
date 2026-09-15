@@ -1,10 +1,10 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { type FilterQuery, Model, Types } from 'mongoose';
 import type { Paginated, TaskDetail, TaskSummary } from '@projectflow/shared';
 import { toUserSummary } from '../common/utils/serialize';
 import { Comment, type CommentDocument } from '../comments/schemas/comment.schema';
-import { canManage, ProjectAccessService } from '../projects/project-access.service';
+import { canManage, canView, ProjectAccessService } from '../projects/project-access.service';
 import { Project, type ProjectDocument } from '../projects/schemas/project.schema';
 import { UsersService } from '../users/users.service';
 import type { CreateTaskDto } from './dto/create-task.dto';
@@ -12,7 +12,6 @@ import type { ListTasksQueryDto } from './dto/list-tasks.dto';
 import type { UpdateTaskDto } from './dto/update-task.dto';
 import type { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { Task, type TaskDocument } from './schemas/task.schema';
-
 @Injectable()
 export class TasksService {
   constructor(
@@ -113,6 +112,50 @@ export class TasksService {
     return this.toDetail(task, access.project);
   }
 
+////
+async assignTask(
+  taskId: Types.ObjectId,
+  actorId: Types.ObjectId,
+  assigneeId: string | null,
+): Promise<TaskDetail> {
+  const task = await this.findTaskOrFail(taskId);
+  const access = await this.projectAccessService.assertCanView(task.projectId, actorId);
+
+  const targetId = assigneeId ? new Types.ObjectId(assigneeId) : null;
+  const currentId = task.assignee ?? null;
+
+  if (!canManage(access)) {
+    if (targetId === null) {
+      if (!currentId?.equals(actorId)) {
+        throw new ForbiddenException('You do not have permission to unassign this task');
+      }
+    } else if (!targetId.equals(actorId)) {
+      throw new ForbiddenException('You do not have permission to assign this task to someone else');
+    }
+  }
+
+  if (targetId) {
+    await this.usersService.findByIdOrFail(targetId);
+    const targetAccess = await this.projectAccessService.resolve(task.projectId, targetId);
+    if (!canView(targetAccess)) {
+      throw new BadRequestException('User is not a member of this project');
+    }
+  }
+
+  if (
+    (currentId === null && targetId === null) ||
+    (currentId !== null && targetId !== null && currentId.equals(targetId))
+  ) {
+    return this.toDetail(task, access.project);
+  }
+
+  task.assignee = targetId;
+  await task.save();
+
+  return this.toDetail(task, access.project);
+}////
+
+  
   async updateStatus(taskId: Types.ObjectId, dto: UpdateTaskStatusDto): Promise<TaskDetail> {
     const task = await this.findTaskOrFail(taskId);
 
@@ -142,8 +185,12 @@ export class TasksService {
       return [];
     }
 
-    const [creators, commentRows] = await Promise.all([
-      this.usersService.findManyByIds(tasks.map((task) => task.createdBy)),
+    const [users, commentRows] = await Promise.all([
+      this.usersService.findManyByIds(
+        tasks.flatMap((task) =>
+          task.assignee ? [task.createdBy, task.assignee] : [task.createdBy],
+        ),
+      ),
       this.commentModel
         .aggregate<{
           _id: Types.ObjectId;
@@ -155,7 +202,7 @@ export class TasksService {
         .exec(),
     ]);
 
-    const creatorsById = new Map(creators.map((user) => [user._id.toString(), user]));
+    const usersById = new Map(users.map((user) => [user._id.toString(), user]));
     const commentCounts = new Map(commentRows.map((row) => [row._id.toString(), row.count]));
 
     return tasks.map((task) => ({
@@ -167,7 +214,10 @@ export class TasksService {
       status: task.status,
       priority: task.priority,
       commentCount: commentCounts.get(task._id.toString()) ?? 0,
-      createdBy: toCreatorSummary(creatorsById.get(task.createdBy.toString())),
+      createdBy: toCreatorSummary(usersById.get(task.createdBy.toString())),
+      assignee: task.assignee
+        ? toCreatorSummary(usersById.get(task.assignee.toString()))
+        : null,
       createdAt: task.createdAt.toISOString(),
       updatedAt: task.updatedAt.toISOString(),
     }));

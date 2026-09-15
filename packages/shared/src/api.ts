@@ -52,6 +52,7 @@ export interface TaskSummary {
   createdBy: UserSummary;
   createdAt: string;
   updatedAt: string;
+  assignee: UserSummary | null;
 }
 
 export interface TaskDetail extends TaskSummary {
