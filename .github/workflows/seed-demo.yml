@@ -1,0 +1,29 @@
+# One-off helper: seed the demo database (Atlas) from CI, where DNS works.
+# Runs only when manually dispatched. Safe to delete after the demo data is loaded.
+name: Seed demo database
+
+on:
+  workflow_dispatch:
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build --filter=@projectflow/api...
+
+      - run: pnpm --filter @projectflow/api seed
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
