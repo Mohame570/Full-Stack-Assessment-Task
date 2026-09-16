@@ -2,10 +2,12 @@ import 'reflect-metadata';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import type { INestApplication } from '@nestjs/common';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 
-async function bootstrap(): Promise<void> {
+/** Builds the application without listening — reused by the serverless entry. */
+export async function createApp(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   const configService = app.get(ConfigService);
 
@@ -22,6 +24,13 @@ async function bootstrap(): Promise<void> {
       transformOptions: { enableImplicitConversion: false },
     }),
   );
+
+  return app;
+}
+
+async function bootstrap(): Promise<void> {
+  const app = await createApp();
+  const configService = app.get(ConfigService);
 
   const port = configService.get<number>('API_PORT') ?? 4732;
   await app.listen(port);

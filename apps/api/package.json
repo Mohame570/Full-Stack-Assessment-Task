@@ -20,6 +20,7 @@
     "@nestjs/mongoose": "11.0.4",
     "@nestjs/platform-express": "11.2.3",
     "@projectflow/shared": "workspace:*",
+    "@vendia/serverless-express": "^4.12.6",
     "bcryptjs": "3.0.3",
     "class-transformer": "0.5.1",
     "class-validator": "0.15.1",
