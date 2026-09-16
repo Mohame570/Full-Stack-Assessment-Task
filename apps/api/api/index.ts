@@ -4,20 +4,23 @@
  * invocations. Local development still uses `src/main.ts` with `app.listen`.
  */
 import type { INestApplication } from '@nestjs/common';
-import serverless from '@vendia/serverless-express';
 import { createApp } from '../src/main';
 
-let cachedHandler: ReturnType<typeof serverless> | undefined;
+let cachedApp: INestApplication | undefined;
 
-async function bootstrap(): Promise<ReturnType<typeof serverless>> {
-  const app: INestApplication = await createApp();
-  await app.init();
-  return serverless({ app: app.getHttpAdapter().getInstance() });
+async function getApp(): Promise<INestApplication> {
+  if (!cachedApp) {
+    cachedApp = await createApp();
+    await cachedApp.init();
+  }
+  return cachedApp;
 }
 
 export default async function handler(req: unknown, res: unknown): Promise<void> {
-  if (!cachedHandler) {
-    cachedHandler = await bootstrap();
-  }
-  return cachedHandler(req, res);
+  const app = await getApp();
+  const instance = app.getHttpAdapter().getInstance() as unknown as (
+    req: unknown,
+    res: unknown,
+  ) => void;
+  return instance(req, res);
 }
