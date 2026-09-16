@@ -69,6 +69,19 @@ export interface CommentEntry {
   updatedAt: string;
 }
 
+export const TASK_ASSIGNEE_CHANGED = 'TASK_ASSIGNEE_CHANGED' as const;
+export type TaskActivityType = typeof TASK_ASSIGNEE_CHANGED;
+
+export interface TaskActivityEntry {
+  id: string;
+  taskId: string;
+  type: TaskActivityType;
+  actor: UserSummary;
+  from: UserSummary | null;
+  to: UserSummary | null;
+  createdAt: string;
+}
+
 export interface AuthSession {
   accessToken: string;
   user: UserSummary;

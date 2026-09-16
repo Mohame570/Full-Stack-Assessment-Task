@@ -10,7 +10,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import type { Paginated, TaskDetail, TaskSummary } from '@projectflow/shared';
+import type { Paginated, TaskActivityEntry, TaskDetail, TaskSummary } from '@projectflow/shared';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { toObjectId } from '../common/utils/object-id';
 import { CreateTaskDto } from './dto/create-task.dto';
@@ -19,7 +19,7 @@ import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { TasksService } from './tasks.service';
 import { AssignTaskDto } from './dto/assign-task.dto';
-
+import { PaginationQueryDto } from '../common/dto/pagination.dto';
 @Controller()
 export class TasksController {
   constructor(private readonly tasksService: TasksService) {}
@@ -68,26 +68,43 @@ export class TasksController {
     );
   }
 
-@Patch('tasks/:taskId/assignee')
-assignTask(
-  @Param('taskId') taskId: string,
-  @CurrentUser('id') userId: string,
-  @Body() dto: AssignTaskDto,
-): Promise<TaskDetail> {
-  return this.tasksService.assignTask(
-    toObjectId(taskId, 'task id'),
-    toObjectId(userId, 'user id'),
-    dto.assigneeId ?? null,
-  );
-}
+  @Patch('tasks/:taskId/assignee')
+  assignTask(
+    @Param('taskId') taskId: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto: AssignTaskDto,
+  ): Promise<TaskDetail> {
+    return this.tasksService.assignTask(
+      toObjectId(taskId, 'task id'),
+      toObjectId(userId, 'user id'),
+      dto.assigneeId ?? null,
+    );
+  }
 
+  @Get('tasks/:taskId/activity')
+  getActivity(
+    @Param('taskId') taskId: string,
+    @CurrentUser('id') userId: string,
+    @Query() query: PaginationQueryDto,
+  ): Promise<Paginated<TaskActivityEntry>> {
+    return this.tasksService.findActivity(
+      toObjectId(taskId, 'task id'),
+      toObjectId(userId, 'user id'),
+      query,
+    );
+  }
 
   @Patch('tasks/:taskId/status')
   updateStatus(
     @Param('taskId') taskId: string,
+    @CurrentUser('id') userId: string,
     @Body() dto: UpdateTaskStatusDto,
   ): Promise<TaskDetail> {
-    return this.tasksService.updateStatus(toObjectId(taskId, 'task id'), dto);
+    return this.tasksService.updateStatus(
+      toObjectId(taskId, 'task id'),
+      toObjectId(userId, 'user id'),
+      dto,
+    );
   }
 
   @Delete('tasks/:taskId')

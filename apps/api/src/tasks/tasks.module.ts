@@ -6,12 +6,13 @@ import { UsersModule } from '../users/users.module';
 import { Task, TaskSchema } from './schemas/task.schema';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
-
+import { TaskActivity, TaskActivitySchema } from './schemas/task-activity.schema';
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Task.name, schema: TaskSchema },
       { name: Comment.name, schema: CommentSchema },
+      { name: TaskActivity.name, schema: TaskActivitySchema },
     ]),
     ProjectsModule,
     UsersModule,

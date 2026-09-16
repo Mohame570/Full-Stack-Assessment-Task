@@ -1,7 +1,12 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { type FilterQuery, Model, Types } from 'mongoose';
-import type { Paginated, TaskDetail, TaskSummary } from '@projectflow/shared';
+import type { Paginated, TaskActivityEntry, TaskDetail, TaskSummary } from '@projectflow/shared';
 import { toUserSummary } from '../common/utils/serialize';
 import { Comment, type CommentDocument } from '../comments/schemas/comment.schema';
 import { canManage, canView, ProjectAccessService } from '../projects/project-access.service';
@@ -12,15 +17,75 @@ import type { ListTasksQueryDto } from './dto/list-tasks.dto';
 import type { UpdateTaskDto } from './dto/update-task.dto';
 import type { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { Task, type TaskDocument } from './schemas/task.schema';
+import { TASK_ASSIGNEE_CHANGED } from '@projectflow/shared';
+import { TaskActivity, type TaskActivityDocument } from './schemas/task-activity.schema';
+import type { PaginationQueryDto } from '../common/dto/pagination.dto';
+
 @Injectable()
 export class TasksService {
   constructor(
+    @InjectModel(TaskActivity.name) private readonly activityModel: Model<TaskActivityDocument>,
     @InjectModel(Task.name) private readonly taskModel: Model<TaskDocument>,
     @InjectModel(Project.name) private readonly projectModel: Model<ProjectDocument>,
     @InjectModel(Comment.name) private readonly commentModel: Model<CommentDocument>,
     private readonly projectAccessService: ProjectAccessService,
     private readonly usersService: UsersService,
   ) {}
+
+  async findActivity(
+    taskId: Types.ObjectId,
+    userId: Types.ObjectId,
+    query: PaginationQueryDto,
+  ): Promise<Paginated<TaskActivityEntry>> {
+    const task = await this.findTaskOrFail(taskId);
+    await this.projectAccessService.assertCanView(task.projectId, userId);
+
+    const [records, total] = await Promise.all([
+      this.activityModel
+        .find({ taskId })
+        .sort({ createdAt: -1 })
+        .skip(query.skip)
+        .limit(query.pageSize)
+        .exec(),
+      this.activityModel.countDocuments({ taskId }),
+    ]);
+
+    return {
+      items: await this.toActivityEntries(records),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
+  }
+
+  private async toActivityEntries(records: TaskActivityDocument[]): Promise<TaskActivityEntry[]> {
+    if (records.length === 0) {
+      return [];
+    }
+
+    const userIds = records.flatMap((record) => {
+      const ids: Types.ObjectId[] = [record.actorId];
+      if (record.from) {
+        ids.push(record.from);
+      }
+      if (record.to) {
+        ids.push(record.to);
+      }
+      return ids;
+    });
+    const users = await this.usersService.findManyByIds(userIds);
+    const usersById = new Map(users.map((user) => [user._id.toString(), user]));
+
+    return records.map((record) => ({
+      id: record._id.toString(),
+      taskId: record.taskId.toString(),
+      type: TASK_ASSIGNEE_CHANGED,
+      actor: toCreatorSummary(usersById.get(record.actorId.toString())),
+      from: record.from ? toCreatorSummary(usersById.get(record.from.toString())) : null,
+      to: record.to ? toCreatorSummary(usersById.get(record.to.toString())) : null,
+      createdAt: record.createdAt.toISOString(),
+    }));
+  }
 
   async findByProject(
     projectId: Types.ObjectId,
@@ -57,21 +122,36 @@ export class TasksService {
   ): Promise<TaskDetail> {
     const { project } = await this.projectAccessService.assertCanView(projectId, userId);
 
-    const taskCount = await this.taskModel.countDocuments({ projectId });
-    const number = taskCount + 1;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const last = await this.taskModel
+        .findOne({ projectId })
+        .sort({ number: -1 })
+        .select('number')
+        .exec();
+      const number = (last?.number ?? 0) + 1;
 
-    const task = await this.taskModel.create({
-      projectId,
-      number,
-      key: `${project.key}-${number}`,
-      title: dto.title,
-      description: dto.description ?? null,
-      status: dto.status,
-      priority: dto.priority,
-      createdBy: userId,
-    });
+      try {
+        const task = await this.taskModel.create({
+          projectId,
+          number,
+          key: `${project.key}-${number}`,
+          title: dto.title,
+          description: dto.description ?? null,
+          status: dto.status,
+          priority: dto.priority,
+          createdBy: userId,
+        });
 
-    return this.toDetail(task, project);
+        return this.toDetail(task, project);
+      } catch (error) {
+        if (attempt < 4 && isDuplicateKeyError(error)) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new BadRequestException('Could not create task, please try again');
   }
 
   async findOne(taskId: Types.ObjectId, userId: Types.ObjectId): Promise<TaskDetail> {
@@ -112,57 +192,76 @@ export class TasksService {
     return this.toDetail(task, access.project);
   }
 
-////
-async assignTask(
-  taskId: Types.ObjectId,
-  actorId: Types.ObjectId,
-  assigneeId: string | null,
-): Promise<TaskDetail> {
-  const task = await this.findTaskOrFail(taskId);
-  const access = await this.projectAccessService.assertCanView(task.projectId, actorId);
+  async assignTask(
+    taskId: Types.ObjectId,
+    actorId: Types.ObjectId,
+    assigneeId: string | null,
+  ): Promise<TaskDetail> {
+    const task = await this.findTaskOrFail(taskId);
+    const access = await this.projectAccessService.assertCanView(task.projectId, actorId);
 
-  const targetId = assigneeId ? new Types.ObjectId(assigneeId) : null;
-  const currentId = task.assignee ?? null;
+    const targetId = assigneeId ? new Types.ObjectId(assigneeId) : null;
+    const currentId = task.assignee ?? null;
 
-  if (!canManage(access)) {
-    if (targetId === null) {
-      if (!currentId?.equals(actorId)) {
-        throw new ForbiddenException('You do not have permission to unassign this task');
+    if (!canManage(access)) {
+      if (targetId === null) {
+        if (!currentId?.equals(actorId)) {
+          throw new ForbiddenException('You do not have permission to unassign this task');
+        }
+      } else if (!targetId.equals(actorId)) {
+        throw new ForbiddenException(
+          'You do not have permission to assign this task to someone else',
+        );
       }
-    } else if (!targetId.equals(actorId)) {
-      throw new ForbiddenException('You do not have permission to assign this task to someone else');
     }
-  }
 
-  if (targetId) {
-    await this.usersService.findByIdOrFail(targetId);
-    const targetAccess = await this.projectAccessService.resolve(task.projectId, targetId);
-    if (!canView(targetAccess)) {
-      throw new BadRequestException('User is not a member of this project');
+    if (targetId) {
+      await this.usersService.findByIdOrFail(targetId);
+      const targetAccess = await this.projectAccessService.resolve(task.projectId, targetId);
+      if (!canView(targetAccess)) {
+        throw new BadRequestException('User is not a member of this project');
+      }
     }
-  }
 
-  if (
-    (currentId === null && targetId === null) ||
-    (currentId !== null && targetId !== null && currentId.equals(targetId))
-  ) {
+    if (
+      (currentId === null && targetId === null) ||
+      (currentId !== null && targetId !== null && currentId.equals(targetId))
+    ) {
+      return this.toDetail(task, access.project);
+    }
+
+    task.assignee = targetId;
+    await task.save();
+
+    await this.activityModel.create({
+      taskId: task._id,
+      projectId: task.projectId,
+      type: TASK_ASSIGNEE_CHANGED,
+      actorId,
+      from: currentId,
+      to: targetId,
+    });
+
     return this.toDetail(task, access.project);
   }
 
-  task.assignee = targetId;
-  await task.save();
-
-  return this.toDetail(task, access.project);
-}////
-
-  
-  async updateStatus(taskId: Types.ObjectId, dto: UpdateTaskStatusDto): Promise<TaskDetail> {
+  async updateStatus(
+    taskId: Types.ObjectId,
+    userId: Types.ObjectId,
+    dto: UpdateTaskStatusDto,
+  ): Promise<TaskDetail> {
     const task = await this.findTaskOrFail(taskId);
+    const access = await this.projectAccessService.assertCanView(task.projectId, userId);
+
+    const isCreator = task.createdBy.equals(userId);
+    if (!canManage(access) && !isCreator) {
+      throw new ForbiddenException('You do not have permission to edit this task');
+    }
 
     task.status = dto.status;
     await task.save();
 
-    return this.toDetail(task);
+    return this.toDetail(task, access.project);
   }
 
   async remove(taskId: Types.ObjectId, userId: Types.ObjectId): Promise<void> {
@@ -215,9 +314,7 @@ async assignTask(
       priority: task.priority,
       commentCount: commentCounts.get(task._id.toString()) ?? 0,
       createdBy: toCreatorSummary(usersById.get(task.createdBy.toString())),
-      assignee: task.assignee
-        ? toCreatorSummary(usersById.get(task.assignee.toString()))
-        : null,
+      assignee: task.assignee ? toCreatorSummary(usersById.get(task.assignee.toString())) : null,
       createdAt: task.createdAt.toISOString(),
       updatedAt: task.updatedAt.toISOString(),
     }));
@@ -252,4 +349,12 @@ const DELETED_USER = {
 
 function toCreatorSummary(user: Parameters<typeof toUserSummary>[0] | undefined) {
   return user ? toUserSummary(user) : DELETED_USER;
+}
+function isDuplicateKeyError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code: unknown }).code === 11000
+  );
 }
