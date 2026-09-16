@@ -239,6 +239,8 @@ POST   /projects/:projectId/tasks
 GET    /tasks/:taskId
 PATCH  /tasks/:taskId
 PATCH  /tasks/:taskId/status
+PATCH  /tasks/:taskId/assignee
+GET    /tasks/:taskId/activity
 DELETE /tasks/:taskId
 
 GET    /tasks/:taskId/comments
@@ -265,3 +267,53 @@ parsing.
 
 Components are server components by default; `"use client"` is added only where
 interactivity or hooks require it.
+
+---
+
+## Assessment changes (task assignment + activity)
+
+New endpoints: `PATCH /tasks/:taskId/assignee` (body `{ assigneeId: string |
+null }`) enforcing the three assignment rules, and `GET
+/tasks/:taskId/activity` (paginated, newest-first, `page`/`pageSize` query).
+Assignment changes are recorded in the `task_activities` collection
+(`TASK_ASSIGNEE_CHANGED` with `actorId`/`from`/`to`), resolved to user
+summaries in one batched lookup; the query is served by a
+`{ taskId: 1, createdAt: -1 }` index. The task details page gained an assignee
+selector (optimistic update with rollback) and an activity timeline.
+
+### Technical decisions
+
+- Task numbering is `max(number) + 1` guarded by a **unique** index on
+  `{ projectId, number }`, with duplicate-key retry (5 attempts). Duplicates
+  are impossible under concurrency; numbering gaps after failures are
+  accepted. See `ASSESSMENT_NOTES.md` for the rejected atomic-counter option.
+- Changing a task's status requires the same permission as editing it
+  (project manager or task creator). See `BUG_REPORT.md`.
+- Docs: `ASSESSMENT_NOTES.md` (architecture, risks, code review, scaling),
+  `BUG_REPORT.md`, `AI_LOG.md`.
+
+### Notes for existing databases
+
+`{ projectId: 1, number: 1 }` changed from a plain index to a unique one. On
+a database created before this change, drop the old index first so Mongoose
+can recreate it, then reseed if you want fresh data:
+
+```powershell
+cd apps/api
+node -e "const m=require('mongoose');m.connect('mongodb://127.0.0.1:27017/projectflow').then(async()=>{await m.connection.db.collection('tasks').dropIndex('projectId_1_number_1');await m.disconnect()})"
+```
+
+### Windows development
+
+`apps/web`'s dev/start scripts use a fixed `--port 3742` (the previous
+`${WEB_PORT:-3742}` syntax only works in bash and crashed `pnpm dev` on
+PowerShell). To move the web app, edit the port in
+`apps/web/package.json` and keep `WEB_ORIGIN` in `.env` in sync.
+
+### Known limitations
+
+- The activity timeline shows the first page (20 entries); cursor-based "load
+  more" is future work.
+- Assignment permission is enforced by the API; the selector stays enabled
+  and surfaces 403s as toasts with rollback.
+- `pnpm test` covers the API (in-memory MongoDB, no local Mongo needed).
