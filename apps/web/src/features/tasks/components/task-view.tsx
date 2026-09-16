@@ -9,7 +9,8 @@ import { formatDate } from '@/lib/format';
 import { useTask } from '../hooks';
 import { TaskPriorityBadge } from './task-priority-badge';
 import { TaskStatusSelect } from './task-status-select';
-
+import { TaskActivityTimeline } from './task-activity-timeline';
+import { TaskAssigneeSelect } from './task-assignee-select';
 interface TaskViewProps {
   projectId: string;
   taskId: string;
@@ -69,6 +70,7 @@ export function TaskView({ projectId, taskId }: TaskViewProps) {
           </section>
 
           <CommentList taskId={taskId} />
+          <TaskActivityTimeline taskId={taskId} />
         </div>
 
         <aside className="space-y-5 lg:border-l lg:border-border lg:pl-6">
@@ -77,6 +79,13 @@ export function TaskView({ projectId, taskId }: TaskViewProps) {
               Status
             </h2>
             <TaskStatusSelect taskId={task.id} projectId={projectId} status={task.status} />
+          </div>
+
+          <div className="space-y-1.5">
+            <h2 className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
+              Assignee
+            </h2>
+            <TaskAssigneeSelect taskId={task.id} projectId={projectId} assignee={task.assignee} />
           </div>
 
           <div className="space-y-1.5">

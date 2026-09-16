@@ -31,3 +31,21 @@ export function initialsOf(name: string): string {
   }
   return `${parts[0]![0]}${parts[parts.length - 1]![0]}`.toUpperCase();
 }
+
+const RELATIVE_FORMATTER = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+
+export function formatRelativeTime(value: string | Date): string {
+  const diffMs = new Date(value).getTime() - Date.now();
+  const minutes = Math.round(diffMs / 60000);
+  if (Math.abs(minutes) < 1) {
+    return 'just now';
+  }
+  if (Math.abs(minutes) < 60) {
+    return RELATIVE_FORMATTER.format(minutes, 'minute');
+  }
+  const hours = Math.round(diffMs / 3600000);
+  if (Math.abs(hours) < 24) {
+    return RELATIVE_FORMATTER.format(hours, 'hour');
+  }
+  return formatDateTime(value);
+}

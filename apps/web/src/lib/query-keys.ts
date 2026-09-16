@@ -1,5 +1,6 @@
 /** Central query-key registry so invalidation stays predictable. */
 export const queryKeys = {
+  taskActivity: (taskId: string) => ['tasks', taskId, 'activity'] as const,
   currentUser: ['current-user'] as const,
   projects: ['projects'] as const,
   project: (projectId: string) => ['projects', projectId] as const,
